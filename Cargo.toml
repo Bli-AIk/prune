@@ -8,9 +8,14 @@ description = "SoupRune mod manager and build assistant"
 
 [dependencies]
 anyhow = "1"
+axum = "0.8.9"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.9.8"
+walkdir = "2"
+zip = { version = "8.1", default-features = false, features = ["deflate"] }
 
 [features]
 default = []

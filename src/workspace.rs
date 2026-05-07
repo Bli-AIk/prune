@@ -36,11 +36,11 @@ impl WorkspacePaths {
 
     pub fn apk_path(&self) -> PathBuf {
         self.android_dir()
-            .join("app")
+            .join("souprune")
             .join("build")
             .join("outputs")
             .join("apk")
             .join("debug")
-            .join("app-debug.apk")
+            .join("souprune-debug.apk")
     }
 }

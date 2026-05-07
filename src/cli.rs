@@ -22,6 +22,8 @@ pub enum Commands {
     Android(AndroidCommand),
     /// Inspect and manage local mods.
     Mod(ModCommand),
+    /// Run the HTTP API server that powers Android Prune.
+    Server(ServerCommand),
 }
 
 #[derive(Args, Debug)]
@@ -56,6 +58,29 @@ pub enum AndroidAction {
 pub struct ModCommand {
     #[command(subcommand)]
     pub action: ModAction,
+}
+
+#[derive(Args, Debug)]
+pub struct ServerCommand {
+    /// Host interface to bind.
+    #[arg(long, default_value = "0.0.0.0")]
+    pub host: String,
+
+    /// TCP port to bind.
+    #[arg(long, default_value_t = 8788)]
+    pub port: u16,
+
+    /// Repository root that contains android/ and projects/.
+    #[arg(long)]
+    pub repo_root: Option<PathBuf>,
+
+    /// Bearer token required by Android clients.
+    #[arg(long)]
+    pub token: String,
+
+    /// Build script that produces the APK.
+    #[arg(long, default_value = "android/build.sh")]
+    pub build_script: PathBuf,
 }
 
 #[derive(Subcommand, Debug)]
@@ -97,6 +122,7 @@ pub fn run_cli(cli: Cli, workspace: WorkspacePaths) -> Result<()> {
         }
         Commands::Android(command) => run_android(command, workspace),
         Commands::Mod(command) => run_mod(command, workspace),
+        Commands::Server(command) => run_server(command, workspace),
     }
 }
 
@@ -132,6 +158,30 @@ fn run_mod(command: ModCommand, workspace: WorkspacePaths) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn run_server(command: ServerCommand, workspace: WorkspacePaths) -> Result<()> {
+    let repo_root = command
+        .repo_root
+        .unwrap_or_else(|| workspace.root().to_path_buf());
+    let config = crate::server::ServerConfig {
+        host: command.host,
+        port: command.port,
+        repo_root,
+        token: command.token,
+        build_script: command.build_script,
+    };
+
+    println!(
+        "prune server listening on http://{}:{}",
+        config.host, config.port
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    runtime.block_on(crate::server::run(config))
 }
 
 fn build_android_plan(command: &AndroidCommand, workspace: &WorkspacePaths) -> Result<AndroidPlan> {

@@ -2,6 +2,7 @@ pub mod android;
 pub mod cli;
 pub mod mods;
 pub mod process;
+pub mod server;
 pub mod workspace;
 
 #[cfg(feature = "gui")]

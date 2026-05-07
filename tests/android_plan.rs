@@ -108,7 +108,33 @@ fn android_plan_prepares_android_jni_library_directory() {
     let rendered = plan.render_shell();
 
     assert!(
-        rendered.contains("mkdir -p /repo/android/app/src/main/jniLibs/arm64-v8a"),
+        rendered.contains("mkdir -p /repo/android/souprune/src/main/jniLibs/arm64-v8a"),
         "{rendered}"
     );
+    assert!(!rendered.contains("/repo/android/prune/src/main/jniLibs/arm64-v8a"));
+}
+
+#[test]
+fn android_plan_installs_souprune_game_debug_apk() {
+    let plan = AndroidPlan::new(
+        PathBuf::from("/repo"),
+        "mad_dummy_example".to_string(),
+        vec!["mad_dummy_example".to_string()],
+        AndroidProfile::Release,
+        None,
+    );
+
+    let rendered = plan.render_shell();
+
+    assert!(
+        rendered.contains(
+            "adb install -r /repo/android/souprune/build/outputs/apk/debug/souprune-debug.apk"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("cd /repo/android && ./gradlew :souprune:assembleDebug --no-daemon"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("/repo/android/prune/build/outputs/apk/debug/prune-debug.apk"));
 }

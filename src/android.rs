@@ -134,7 +134,7 @@ fn build_stages(
     );
     let jni_lib_dir = root
         .join("android")
-        .join("app")
+        .join("souprune")
         .join("src")
         .join("main")
         .join("jniLibs")
@@ -161,19 +161,19 @@ fn build_stages(
         CommandStage::new(
             "assemble debug apk",
             "./gradlew",
-            ["assembleDebug", "--no-daemon"],
+            [":souprune:assembleDebug", "--no-daemon"],
         )
         .cwd(root.join("android")),
     );
 
     let apk = root
         .join("android")
-        .join("app")
+        .join("souprune")
         .join("build")
         .join("outputs")
         .join("apk")
         .join("debug")
-        .join("app-debug.apk");
+        .join("souprune-debug.apk");
     stages.push(adb_stage(
         "install apk",
         device,
