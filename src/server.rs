@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
-use std::io::{self, Seek, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -24,6 +26,7 @@ use zip::write::SimpleFileOptions;
 use crate::mods::{ActiveProjectConfig, ModGraph};
 
 const MAX_SERVER_EVENTS: usize = 200;
+const BUILD_PROGRESS_TOTAL: u64 = 6;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -71,6 +74,9 @@ pub struct BuildSnapshot {
     pub exit_code: Option<i32>,
     pub apk_path: Option<String>,
     pub log: String,
+    pub progress_current: u64,
+    pub progress_total: u64,
+    pub progress_message: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -114,6 +120,9 @@ struct BuildJob {
     exit_code: Option<i32>,
     apk_path: Option<String>,
     log: String,
+    progress_current: u64,
+    progress_total: u64,
+    progress_message: String,
 }
 
 #[derive(Debug)]
@@ -279,6 +288,9 @@ async fn start_build(
         exit_code: None,
         apk_path: None,
         log: String::new(),
+        progress_current: 0,
+        progress_total: BUILD_PROGRESS_TOTAL,
+        progress_message: "queued".to_string(),
     };
 
     {
@@ -354,42 +366,83 @@ fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
 
 fn run_build_job(state: AppState, id: u64) {
     set_build_status(&state, id, BuildStatus::Running, None, None, String::new());
+    set_build_progress(&state, id, 0, BUILD_PROGRESS_TOTAL, "running");
     let script = resolve_build_script(&state.inner.config);
     record_event(
         &state,
         format!("build #{id} started: {} --apk-only", script.display()),
     );
 
-    let output = Command::new(&script)
+    let mut child = match Command::new(&script)
         .arg("--apk-only")
         .current_dir(&state.inner.config.repo_root)
-        .output();
-
-    let (status, exit_code, log) = match output {
-        Ok(output) => {
-            let mut log = String::new();
-            log.push_str(&String::from_utf8_lossy(&output.stdout));
-            log.push_str(&String::from_utf8_lossy(&output.stderr));
-            let exit_code = output.status.code();
-            let status = if output.status.success() {
-                BuildStatus::Succeeded
-            } else {
-                BuildStatus::Failed
-            };
-            (status, exit_code, log)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            append_build_output_line(&state, id, &format!("failed to run build script: {error}"));
+            finish_build_job(&state, id, BuildStatus::Failed, None);
+            return;
         }
-        Err(error) => (
-            BuildStatus::Failed,
-            None,
-            format!("failed to run build script: {error}\n"),
-        ),
+    };
+
+    let (sender, receiver) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        spawn_output_reader(stdout, sender.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_output_reader(stderr, sender.clone());
+    }
+    drop(sender);
+
+    for line in receiver {
+        append_build_output_line(&state, id, &line);
+    }
+
+    let wait_result = child.wait();
+    let (status, exit_code) = match wait_result {
+        Ok(status) if status.success() => (BuildStatus::Succeeded, status.code()),
+        Ok(status) => (BuildStatus::Failed, status.code()),
+        Err(error) => {
+            append_build_output_line(
+                &state,
+                id,
+                &format!("failed to wait for build script: {error}"),
+            );
+            (BuildStatus::Failed, None)
+        }
     };
 
     record_event(
         &state,
         format!("build #{id} finished status={status:?} exit={exit_code:?}"),
     );
+    finish_build_job(&state, id, status, exit_code);
+}
 
+fn spawn_output_reader<R>(reader: R, sender: mpsc::Sender<String>)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let reader = BufReader::new(reader);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    let _ = sender.send(line);
+                }
+                Err(error) => {
+                    let _ = sender.send(format!("failed to read build output: {error}"));
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn finish_build_job(state: &AppState, id: u64, status: BuildStatus, exit_code: Option<i32>) {
     let apk_path = if matches!(status, BuildStatus::Succeeded) {
         Some(latest_apk_path(&state.inner.config.repo_root))
     } else {
@@ -401,7 +454,13 @@ fn run_build_job(state: AppState, id: u64) {
         job.status = status;
         job.exit_code = exit_code;
         job.apk_path = apk_path.as_ref().map(|path| path.display().to_string());
-        job.log = log;
+        if matches!(status, BuildStatus::Succeeded) {
+            job.progress_current = BUILD_PROGRESS_TOTAL;
+            job.progress_total = BUILD_PROGRESS_TOTAL;
+            job.progress_message = "build succeeded".to_string();
+        } else {
+            job.progress_message = "build failed".to_string();
+        }
     }
 }
 
@@ -432,6 +491,64 @@ fn set_build_status(
     }
 }
 
+fn set_build_progress(
+    state: &AppState,
+    id: u64,
+    current: u64,
+    total: u64,
+    message: impl Into<String>,
+) {
+    let mut builds = state.inner.builds.lock().expect("builds lock");
+    if let Some(job) = builds.get_mut(&id) {
+        job.progress_current = current.min(total);
+        job.progress_total = total;
+        job.progress_message = message.into();
+    }
+}
+
+fn append_build_output_line(state: &AppState, id: u64, line: &str) {
+    let mut progress_event = None;
+    {
+        let mut builds = state.inner.builds.lock().expect("builds lock");
+        if let Some(job) = builds.get_mut(&id) {
+            job.log.push_str(line);
+            job.log.push('\n');
+            if let Some((current, total, message)) = parse_build_progress(line) {
+                job.progress_current = current.min(total);
+                job.progress_total = total;
+                job.progress_message = message.to_string();
+                progress_event = Some(format!(
+                    "build #{id} progress {}/{} {}",
+                    job.progress_current, job.progress_total, job.progress_message
+                ));
+            }
+        }
+    }
+
+    if let Some(message) = progress_event {
+        record_event(state, message);
+    }
+}
+
+fn parse_build_progress(line: &str) -> Option<(u64, u64, &'static str)> {
+    if line.contains("[assets]") {
+        return Some((1, BUILD_PROGRESS_TOTAL, "prepare assets"));
+    }
+    if line.contains("[1/3]") {
+        return Some((2, BUILD_PROGRESS_TOTAL, "build native library"));
+    }
+    if line.contains("[2/3]") {
+        return Some((4, BUILD_PROGRESS_TOTAL, "copy native libraries"));
+    }
+    if line.contains("[3/3]") {
+        return Some((6, BUILD_PROGRESS_TOTAL, "build APK"));
+    }
+    if line.contains("APK 构建成功") || line.contains("APK build") {
+        return Some((BUILD_PROGRESS_TOTAL, BUILD_PROGRESS_TOTAL, "build APK"));
+    }
+    None
+}
+
 fn snapshot_build(state: &AppState, id: u64) -> Result<BuildSnapshot> {
     let builds = state.inner.builds.lock().expect("builds lock");
     let job = builds
@@ -443,6 +560,9 @@ fn snapshot_build(state: &AppState, id: u64) -> Result<BuildSnapshot> {
         exit_code: job.exit_code,
         apk_path: job.apk_path.clone(),
         log: job.log.clone(),
+        progress_current: job.progress_current,
+        progress_total: job.progress_total,
+        progress_message: job.progress_message.clone(),
     })
 }
 
@@ -658,5 +778,64 @@ mod tests {
             path,
             PathBuf::from("/repo/android/souprune/build/outputs/apk/debug/souprune-debug.apk")
         );
+    }
+
+    #[test]
+    fn build_snapshot_serializes_stage_progress() {
+        let snapshot = BuildSnapshot {
+            id: 7,
+            status: BuildStatus::Running,
+            exit_code: None,
+            apk_path: None,
+            log: String::new(),
+            progress_current: 3,
+            progress_total: 5,
+            progress_message: "building native library".to_string(),
+        };
+
+        let json = serde_json::to_value(snapshot).expect("serialize build snapshot");
+
+        assert_eq!(json["progress_current"], 3);
+        assert_eq!(json["progress_total"], 5);
+        assert_eq!(json["progress_message"], "building native library");
+    }
+
+    #[test]
+    fn build_output_lines_update_stage_progress() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state = AppState {
+            inner: Arc::new(ServerState {
+                config: ServerConfig {
+                    host: "127.0.0.1".to_string(),
+                    port: 8788,
+                    repo_root: temp.path().to_path_buf(),
+                    token: "test-token".to_string(),
+                    build_script: PathBuf::from("android/build.sh"),
+                },
+                next_build_id: AtomicU64::new(1),
+                builds: Mutex::new(BTreeMap::from([(
+                    1,
+                    BuildJob {
+                        id: 1,
+                        status: BuildStatus::Running,
+                        exit_code: None,
+                        apk_path: None,
+                        log: String::new(),
+                        progress_current: 0,
+                        progress_total: BUILD_PROGRESS_TOTAL,
+                        progress_message: "queued".to_string(),
+                    },
+                )])),
+                events: Mutex::new(VecDeque::new()),
+            }),
+        };
+
+        append_build_output_line(&state, 1, "▶ [2/3] 复制 .so 到 jniLibs...");
+        let snapshot = snapshot_build(&state, 1).expect("snapshot");
+
+        assert_eq!(snapshot.progress_current, 4);
+        assert_eq!(snapshot.progress_total, BUILD_PROGRESS_TOTAL);
+        assert_eq!(snapshot.progress_message, "copy native libraries");
+        assert!(snapshot.log.contains("jniLibs"));
     }
 }
