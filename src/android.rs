@@ -2,10 +2,6 @@ use std::path::PathBuf;
 
 use crate::process::CommandStage;
 
-const ANDROID_PACKAGE: &str = "com.bliaik.souprune";
-const ANDROID_PROJECTS_DIR: &str = "/sdcard/SoupRune/projects";
-const ANDROID_BUILTINS_DIR: &str = "/sdcard/SoupRune/builtins";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AndroidProfile {
     Debug,
@@ -178,86 +174,6 @@ fn build_stages(
         "install apk",
         device,
         ["install", "-r", &apk.display().to_string()],
-    ));
-    stages.push(adb_stage(
-        "prepare device storage",
-        device,
-        [
-            "shell",
-            "mkdir",
-            "-p",
-            ANDROID_PROJECTS_DIR,
-            ANDROID_BUILTINS_DIR,
-        ],
-    ));
-    stages.push(
-        adb_stage(
-            "allow external storage appop",
-            device,
-            [
-                "shell",
-                "appops",
-                "set",
-                ANDROID_PACKAGE,
-                "MANAGE_EXTERNAL_STORAGE",
-                "allow",
-            ],
-        )
-        .allow_failure(),
-    );
-    stages.push(
-        adb_stage(
-            "grant read external storage",
-            device,
-            [
-                "shell",
-                "pm",
-                "grant",
-                ANDROID_PACKAGE,
-                "android.permission.READ_EXTERNAL_STORAGE",
-            ],
-        )
-        .allow_failure(),
-    );
-    stages.push(adb_stage(
-        "sync config",
-        device,
-        [
-            "push",
-            &root
-                .join("projects")
-                .join("config.toml")
-                .display()
-                .to_string(),
-            &format!("{ANDROID_PROJECTS_DIR}/config.toml"),
-        ],
-    ));
-
-    for mod_name in mod_order {
-        stages.push(adb_stage(
-            format!("sync mod {mod_name}"),
-            device,
-            [
-                "push",
-                &root.join("projects").join(mod_name).display().to_string(),
-                &format!("{ANDROID_PROJECTS_DIR}/"),
-            ],
-        ));
-    }
-
-    stages.push(adb_stage(
-        "sync builtin wasm",
-        device,
-        [
-            "push",
-            &root
-                .join("assets")
-                .join("builtins")
-                .join("souprune_builtins.wasm")
-                .display()
-                .to_string(),
-            &format!("{ANDROID_BUILTINS_DIR}/souprune_builtins.wasm"),
-        ],
     ));
 
     if mod_order.last().map(String::as_str) != Some(mod_name) {

@@ -29,11 +29,11 @@ fn android_plan_builds_assets_before_native_library() {
     assert!(labels.contains(&"build android native library"));
     assert!(labels.contains(&"assemble debug apk"));
     assert!(labels.contains(&"install apk"));
-    assert!(labels.contains(&"sync builtin wasm"));
+    assert!(!labels.contains(&"sync builtin wasm"));
 }
 
 #[test]
-fn android_plan_syncs_dependency_mod_folders() {
+fn android_plan_keeps_mod_sync_in_prune_provider_instead_of_adb_sdcard() {
     let plan = AndroidPlan::new(
         PathBuf::from("/repo"),
         "mad_dummy_example".to_string(),
@@ -47,13 +47,9 @@ fn android_plan_syncs_dependency_mod_folders() {
 
     let rendered = plan.render_shell();
 
-    assert!(rendered.contains(
-        "adb -s DEVICE123 push /repo/projects/undertale_preset /sdcard/SoupRune/projects/"
-    ));
-    assert!(rendered.contains(
-        "adb -s DEVICE123 push /repo/projects/mad_dummy_example /sdcard/SoupRune/projects/"
-    ));
-    assert!(rendered.contains("/repo/assets/builtins/souprune_builtins.wasm"));
+    assert!(!rendered.contains("/sdcard/SoupRune"));
+    assert!(!rendered.contains("adb -s DEVICE123 push /repo/projects"));
+    assert!(!rendered.contains("souprune_builtins.wasm /sdcard"));
 }
 
 #[test]
@@ -73,7 +69,7 @@ fn android_plan_uses_debug_native_library_for_debug_profile() {
 }
 
 #[test]
-fn android_plan_prepares_device_storage_and_permissions() {
+fn android_plan_does_not_request_external_storage_permissions() {
     let plan = AndroidPlan::new(
         PathBuf::from("/repo"),
         "mad_dummy_example".to_string(),
@@ -84,15 +80,9 @@ fn android_plan_prepares_device_storage_and_permissions() {
 
     let rendered = plan.render_shell();
 
-    assert!(rendered.contains(
-        "adb -s DEVICE123 shell mkdir -p /sdcard/SoupRune/projects /sdcard/SoupRune/builtins"
-    ));
-    assert!(
-        rendered.contains("adb -s DEVICE123 shell appops set com.bliaik.souprune MANAGE_EXTERNAL_STORAGE allow || true")
-    );
-    assert!(
-        rendered.contains("adb -s DEVICE123 shell pm grant com.bliaik.souprune android.permission.READ_EXTERNAL_STORAGE || true")
-    );
+    assert!(!rendered.contains("MANAGE_EXTERNAL_STORAGE"));
+    assert!(!rendered.contains("READ_EXTERNAL_STORAGE"));
+    assert!(!rendered.contains("pm grant"));
 }
 
 #[test]
