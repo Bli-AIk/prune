@@ -1,15 +1,16 @@
-use std::fs;
+use clap::Parser;
 use std::path::PathBuf;
 
-#[test]
-fn apk_only_build_script_targets_souprune_game_apk() {
-    let script = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../android/build.sh"),
-    )
-    .expect("read android/build.sh");
+use prune::cli::{Cli, Commands};
 
-    assert!(script.contains(":souprune:assembleDebug"));
-    assert!(script.contains("souprune-debug.apk"));
-    assert!(script.contains("android/souprune/src/main/jniLibs/arm64-v8a"));
-    assert!(!script.contains(":prune:assembleDebug"));
+#[test]
+fn server_command_defaults_to_souprune_build_script() {
+    let cli = Cli::parse_from(["prune", "server", "--token", "test-token"]);
+
+    match cli.command {
+        Commands::Server(server) => {
+            assert_eq!(server.build_script, PathBuf::from("android/build.sh"));
+        }
+        _ => panic!("expected server command"),
+    }
 }
