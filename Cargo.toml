@@ -1,0 +1,31 @@
+[package]
+name = "prune"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Bli-AIk/prune"
+description = "SoupRune mod manager and build assistant"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8.9"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.9.8"
+walkdir = "2"
+zip = { version = "8.1", default-features = false, features = ["deflate"] }
+
+[features]
+default = []
+gui = ["dep:dioxus"]
+
+[dependencies.dioxus]
+version = "0.7.7"
+optional = true
+default-features = false
+features = ["desktop", "minimal"]
+
+[dev-dependencies]
+tempfile = "3"
