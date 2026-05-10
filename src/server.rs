@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -384,7 +384,7 @@ fn server_info_snapshot(state: &AppState) -> Result<ServerInfo> {
     let config = &state.inner.config;
     let latest_apk = latest_apk_path(&config.repo_root);
     let snapshot = load_mods_snapshot(&config.repo_root.join("projects")).ok();
-    let build_count = state.inner.builds.lock().expect("builds lock").len();
+    let build_count = lock_or_recover(&state.inner.builds).len();
 
     Ok(ServerInfo {
         host: config.host.clone(),
@@ -413,7 +413,7 @@ fn record_event(state: &AppState, message: impl Into<String>) {
         entry.timestamp_unix_secs, entry.message
     );
 
-    let mut events = state.inner.events.lock().expect("events lock");
+    let mut events = lock_or_recover(&state.inner.events);
     events.push_back(entry);
     while events.len() > MAX_SERVER_EVENTS {
         events.pop_front();
@@ -421,14 +421,14 @@ fn record_event(state: &AppState, message: impl Into<String>) {
 }
 
 fn recent_events(state: &AppState) -> Vec<ServerLogEntry> {
-    state
-        .inner
-        .events
-        .lock()
-        .expect("events lock")
+    lock_or_recover(&state.inner.events)
         .iter()
         .cloned()
         .collect()
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 #[derive(Serialize)]

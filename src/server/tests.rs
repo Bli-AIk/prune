@@ -59,6 +59,39 @@ fn server_state_records_runtime_events_for_info() {
 }
 
 #[test]
+fn server_state_recovers_poisoned_event_lock() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state = AppState {
+        inner: Arc::new(ServerState {
+            config: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8788,
+                repo_root: temp.path().to_path_buf(),
+                token: "test-token".to_string(),
+                build_script: PathBuf::from("android/build.sh"),
+            },
+            next_build_id: AtomicU64::new(1),
+            builds: Mutex::new(new_build_map()),
+            events: Mutex::new(VecDeque::new()),
+        }),
+    };
+
+    let poisoned = state.clone();
+    let _ = std::panic::catch_unwind(move || {
+        let _guard = poisoned.inner.events.lock().expect("events lock");
+        panic!("poison events lock");
+    });
+
+    record_event(&state, "recovered");
+
+    assert!(
+        recent_events(&state)
+            .iter()
+            .any(|event| event.message == "recovered")
+    );
+}
+
+#[test]
 fn latest_apk_path_points_at_souprune_game_apk() {
     let path = latest_apk_path(Path::new("/repo"));
     assert_eq!(
