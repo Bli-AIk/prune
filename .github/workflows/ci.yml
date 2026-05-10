@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: prune
+
+permissions:
+  checks: write
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libudev-dev \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libxdo-dev \
+            libxkbcommon-dev \
+            libxrandr-dev \
+            libx11-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libgl1-mesa-dev \
+            pkg-config \
+            mold \
+            jq
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-test"
+
+      - name: Install tools
+        run: cargo install tokei
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Lint checks
+        run: bash tokei_check.sh
+
+      - name: Build
+        run: cargo build --all-targets --all-features --locked
+
+      - name: Run tests
+        run: cargo nextest run --all-targets --all-features --locked
+
+      - name: Android build
+        run: |
+          # TODO: Enable standalone Android CI after prune owns a Gradle wrapper
+          # and root settings/build files instead of relying on SoupRune's parent
+          # repository android/ project.
+          test -f android/build.gradle
+
+  deny:
+    name: Cargo Deny
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features --locked
+
+  security:
+    name: Security Audit
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

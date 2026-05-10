@@ -5,7 +5,7 @@
 
 > 当前状态：🚧 早期开发阶段
 
-**prune** — SoupRune 的 mod 管理器与 Android 构建辅助工具。
+**prune** — SoupRune 的 mod 管理器，提供 CLI 与 GUI 双前端。
 
 | English | Simplified Chinese |
 |---------|--------------------|
@@ -13,35 +13,69 @@
 
 ## 简介
 
-`prune` 是 [SoupRune](https://github.com/Bli-AIk/souprune) 的管理与构建辅助工具。
+`prune` 是 [SoupRune](https://github.com/Bli-AIk/souprune) 的 mod 管理器。
 
-它当前的首要目标是 Linux 优先的 Android 工作流：通过一条命令链路规划、构建、安装，并把 SoupRune 运行时、
-builtin WASM、当前 mod 与依赖 mod 同步到 Android 设备。
+提供两个前端：
 
-当前实现位于 [`feat/init`](https://github.com/Bli-AIk/prune/tree/feat/init) 分支。`main` 分支刻意只保留仓库元数据、
-README 文件和许可证。
+| 前端 | 技术栈 | 角色 |
+|------|--------|------|
+| **prune CLI** | Rust | 开发者工具 — 规划、构建、部署、服务 |
+| **prune GUI** | Android (Java) | 面向普通用户的 mod 管理 |
+
+GUI 直接操作设备上的本地工作区（`/storage/emulated/0/SoupRune/projects/`）：发现已安装的 mod、切换
+当前 mod、修改配置——全部在本地完成，无需服务器。仅在需要远程触发构建或下载产物时，才连接 prune server。
+
+Android GUI 当前为原生实现。未来计划用 Dioxus 重写为跨平台应用，覆盖更多设备和桌面端。
+
+## 架构
+
+```
+┌──────────────┐                ┌────────────────┐
+│  prune CLI   │                │   prune GUI    │
+│  (Rust)      │   HTTP API     │  (Android)     │
+│              │◄──────────────►│                │
+│  开发端      │  prune server  │  用户端        │
+│  构建/部署   │  (高级功能)    │  本地 mod 管理 │
+└──────────────┘                └────────────────┘
+```
+
+- **GUI** 运行在 Android 设备上，直接读写本地文件系统中的 mod。
+- **CLI** 运行在开发者机器上，用于工作区检查、构建规划、设备部署。
+- **Server**（`prune server`）仅在 GUI 需要远程构建或下载产物时使用。
 
 ## 特性
 
-* **Android 构建规划** — 在执行前生成有序的构建、安装和同步阶段。
-* **Android 部署辅助** — 执行同一套阶段，用于本地 Android 部署。
-* **依赖感知的 mod 同步** — 构建并同步当前 mod 及其依赖 mod。
-* **CLI 优先工作流** — 提供 `doctor`、`android plan`、`android deploy`、`mod list` 等命令。
-* **Dioxus GUI 外壳** — 保留 feature-gated 的桌面 GUI 入口，为后续跨平台工具做准备。
+### CLI
+
+- `doctor` — 检查本地 SoupRune 工作区布局。
+- `mod list` — 列出已发现的本地 mod。
+- `android plan` — 打印有序的构建/安装/同步阶段，不执行。
+- `android deploy` — 执行全部阶段，完成端到端 Android 部署。
+- `server` — 启动 HTTP API 服务器（供 GUI 高级功能使用）。
+- `--gui` — 启动实验性 Dioxus 桌面外壳（`--features gui`）。
+
+### GUI (Android)
+
+- 浏览设备上已安装的 mod。
+- 切换当前 mod，配置语言和分辨率。
+- 查看 mod 依赖关系，检测缺失的依赖链。
+- 远程触发构建并流式查看进度（需要 prune server）。
+- 国际化支持（英文、简体中文）。
 
 ## 如何使用
-
-使用当前开发分支：
 
 ```bash
 git clone https://github.com/Bli-AIk/prune.git
 cd prune
-git switch feat/init
 ```
 
-在 SoupRune 工作区中，工具预期作为 `crates/prune` 子模块使用：
+在 SoupRune 工作区中使用 CLI：
 
 ```bash
+# 查看可用 mod
+cargo run -p prune -- mod list
+
+# 规划和执行 Android 构建
 cargo run -p prune -- android plan --mod mad_dummy_example --device DEVICE123
 cargo run -p prune -- android deploy --mod mad_dummy_example --device DEVICE123
 ```
@@ -50,46 +84,44 @@ cargo run -p prune -- android deploy --mod mad_dummy_example --device DEVICE123
 
 ### 前置条件
 
-* Rust 1.85 或更高版本
-* Android 工作流需要：Android SDK、Android NDK、JDK、Gradle wrapper、`adb`
-* Linux 上的 GUI feature 需要：GTK/WebKit 桌面开发包
+- Rust 1.85 或更高版本
+- Linux 上启用 Dioxus GUI feature 需要：GTK/WebKit 桌面开发包
 
 ### 构建步骤
 
 ```bash
-# 1. 克隆 SoupRune 工作区及子模块
 git clone --recurse-submodules https://github.com/Bli-AIk/souprune.git
 cd souprune
 
-# 2. 使用 prune 开发分支
-git -C crates/prune switch feat/init
-
-# 3. 运行测试
 cargo test -p prune
-
-# 4. 检查可选 GUI feature
 cargo check -p prune --features gui
 ```
 
 ## 依赖项
 
-核心依赖如下：
+### Rust (CLI & Server)
 
 | Crate | 版本 | 作用 |
-|-------|---------|-------------|
-| [clap](https://crates.io/crates/clap) | 4 | 处理命令行参数 |
-| [anyhow](https://crates.io/crates/anyhow) | 1 | 方便地处理报错信息 |
-| [serde](https://crates.io/crates/serde) | 1 | 解析项目与 mod 元数据 |
-| [toml](https://crates.io/crates/toml) | 0.9 | 读取 SoupRune 项目配置文件 |
-| [dioxus](https://crates.io/crates/dioxus) | 0.7 | 可选桌面 GUI 外壳 |
+|-------|------|------|
+| [clap](https://crates.io/crates/clap) | 4 | 命令行参数解析。 |
+| [axum](https://crates.io/crates/axum) | 0.8 | GUI 后端的 HTTP 服务器。 |
+| [tokio](https://crates.io/crates/tokio) | 1 | 异步运行时。 |
+| [serde](https://crates.io/crates/serde) + [serde_json](https://crates.io/crates/serde_json) | 1 | 配置与 API 序列化。 |
+| [toml](https://crates.io/crates/toml) | 0.9 | SoupRune 项目配置解析。 |
+| [zip](https://crates.io/crates/zip) | 8 | Mod 打包。 |
+| [dioxus](https://crates.io/crates/dioxus) | 0.7 | 可选桌面 GUI（feature-gated）。 |
+
+### Android GUI
+
+- 依赖项参见 `android/build.gradle`。
 
 ## 贡献指南
 
-随时欢迎提交 Issue 或 Pull Request！无论你是想修个 Bug，加个功能，还是只是想改改错别字。
+欢迎提交 Issue 和 Pull Request。
 
 ## 许可证
 
-本项目采用双协议开源，你可以自由选择：
+双协议开源，可选择以下任一：
 
-* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) 或 [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0))
-* MIT license ([LICENSE-MIT](LICENSE-MIT) 或 [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) 或 http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) 或 http://opensource.org/licenses/MIT)
